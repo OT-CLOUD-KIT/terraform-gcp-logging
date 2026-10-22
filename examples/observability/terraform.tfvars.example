@@ -1,0 +1,7 @@
+project_id          = "example-project"
+project_number      = "123456789012"
+organization_id     = "123456789012"
+billing_account     = "billingAccounts/000000-000000-000000"
+notification_email  = "platform@example.com"
+monthly_budget_units = "300"
+scc_pubsub_topic    = "projects/example-project/topics/scc-findings"

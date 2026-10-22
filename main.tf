@@ -1,21 +1,76 @@
-resource "google_logging_project_bucket_config" "log_bucket" {
-for_each = var.create_bucket == true ? toset(var.bucket_ids) : toset([])
+resource "terraform_data" "dependency_getter" {
+  input = var.dependencies
+}
 
-  project        = var.project_id
-  location       = var.location
-  retention_days = var.retention_days != null ? var.retention_days : 30 # Default to 30 days if null
-  bucket_id      = each.key
-  description    = var.description != "" ? var.description : "Default bucket description" # Default description if empty
+resource "google_logging_project_bucket_config" "bucket" {
+  for_each = var.log_buckets
 
-  lifecycle {
-    prevent_destroy = false
+  depends_on = [terraform_data.dependency_getter]
+
+  project          = var.project_id
+  location         = each.value.location
+  bucket_id        = each.key
+  retention_days   = each.value.retention_days
+  description      = each.value.description
+  locked           = each.value.locked
+  enable_analytics = each.value.enable_analytics
+
+  dynamic "cmek_settings" {
+    for_each = each.value.kms_key_name == null ? [] : [each.value.kms_key_name]
+    content {
+      kms_key_name = cmek_settings.value
+    }
   }
 }
 
-resource "google_logging_project_sink" "log_sink" {
-  for_each         = toset(var.sink_names) # Loop through multiple sink names
-  name             = each.key
-  project          = var.project_id
-  destination      = "logging.googleapis.com/projects/${var.project_id}/locations/${var.location}/buckets/${var.bucket_ids[0]}" # You can modify this for different buckets per sink
-  filter           = var.filter
+resource "google_logging_project_sink" "sink" {
+  for_each = var.log_sinks
+
+  depends_on = [
+    terraform_data.dependency_getter,
+    google_logging_project_bucket_config.bucket,
+  ]
+
+  project                = var.project_id
+  name                   = each.key
+  destination            = each.value.bucket_key == null ? each.value.destination : local.bucket_destinations[each.value.bucket_key]
+  filter                 = each.value.filter
+  description            = each.value.description
+  disabled               = each.value.disabled
+  unique_writer_identity = each.value.unique_writer_identity
+  custom_writer_identity = each.value.custom_writer_identity
+  deletion_policy        = each.value.deletion_policy
+
+  dynamic "bigquery_options" {
+    for_each = each.value.use_partitioned_tables == null ? [] : [each.value.use_partitioned_tables]
+    content {
+      use_partitioned_tables = bigquery_options.value
+    }
+  }
+
+  dynamic "exclusions" {
+    for_each = each.value.exclusions
+    content {
+      name        = exclusions.key
+      description = exclusions.value.description
+      filter      = exclusions.value.filter
+      disabled    = exclusions.value.disabled
+    }
+  }
+}
+
+resource "google_logging_metric" "metric" {
+  for_each = var.log_metrics
+
+  depends_on = [
+    terraform_data.dependency_getter,
+    google_logging_project_bucket_config.bucket,
+  ]
+
+  project     = var.project_id
+  name        = each.key
+  description = each.value.description
+  filter      = each.value.filter
+  disabled    = each.value.disabled
+  bucket_name = each.value.bucket_key == null ? null : local.bucket_names[each.value.bucket_key]
 }
